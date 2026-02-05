@@ -7,14 +7,26 @@ export default function JobListing() {
   const [search, setSearch] = useState('');
   const [jobs, setJobs] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const api = useApi();
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    api.getJobs(search).then((list) => {
-      if (!cancelled) setJobs(list || []);
-    }).finally(() => { if (!cancelled) setLoading(false); });
+    setError(null);
+    api.getJobs(search)
+      .then((list) => {
+        if (!cancelled) setJobs(Array.isArray(list) ? list : []);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setJobs([]);
+          setError(err?.message || 'Failed to load jobs. Check the API is running (e.g. curl http://localhost:3000/jobs).');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
     return () => { cancelled = true; };
   }, [search, api]);
 
@@ -31,12 +43,17 @@ export default function JobListing() {
           className="w-full rounded-lg border border-gray-300 py-2.5 pl-10 pr-4 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
         />
       </div>
+      {error && (
+        <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+          {error}
+        </div>
+      )}
       {loading ? (
         <p className="text-gray-500">Loading...</p>
       ) : (
         <div className="grid gap-4 md:grid-cols-2">
           {jobs.length === 0 ? (
-            <p className="text-gray-500">No jobs match your search.</p>
+            <p className="text-gray-500">{error ? null : 'No jobs match your search.'}</p>
           ) : (
             jobs.map((job) => <JobCard key={job.id} job={job} />)
           )}

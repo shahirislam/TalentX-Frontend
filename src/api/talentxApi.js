@@ -135,6 +135,16 @@ export async function apiGetMatchedTalents(jobId, getToken) {
   }));
 }
 
+/** All signed-up job seekers (employer). */
+export async function apiGetAllTalents(getToken) {
+  const list = await request('talents/all', {}, getToken);
+  return (list || []).map((item) => ({
+    talentId: item.talent?.uid ?? item.talentId,
+    talentName: item.talent?.name ?? item.talentName ?? 'Talent',
+    score: item.score ?? null,
+  }));
+}
+
 // —— Talent job feed (talent) ——
 
 export async function apiGetMatchedJobs(getToken) {
@@ -171,6 +181,25 @@ export async function apiRespondToInvitation(invitationId, status, getToken) {
     body: JSON.stringify({ status }),
   }, getToken);
   return normalizeInvitation(inv);
+}
+
+// —— Talent: my applications ——
+
+export async function apiGetMyApplications(getToken) {
+  const list = await request('talent/applications', {}, getToken);
+  return (list || []).map((a) => ({
+    id: a._id ?? a.id,
+    jobId: a.jobId?.toString?.() ?? a.jobId,
+    talentId: a.talentId,
+    source: a.source ?? 'manual',
+    job: a.job
+      ? {
+          id: a.job._id ?? a.job.id,
+          title: a.job.title,
+          company: a.job.companyName ?? a.job.company,
+        }
+      : null,
+  }));
 }
 
 // Re-export for convenience

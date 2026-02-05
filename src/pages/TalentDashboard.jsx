@@ -146,7 +146,7 @@ export default function TalentDashboard() {
         ) : (
           <ul className="space-y-2">
             {applications.map((app) => {
-              const job = allJobs.find((j) => j.id === app.jobId) || {};
+              const job = app.job || allJobs.find((j) => j.id === app.jobId) || {};
               return (
                 <li key={app.id} className="flex items-center justify-between rounded border border-gray-100 p-3">
                   <div>

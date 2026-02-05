@@ -5,6 +5,7 @@ import { apiOnboard } from '../api/talentxApi.js';
 import { isRealApi } from '../api/client.js';
 
 const AUTH_STORAGE_KEY = 'talentx_auth';
+const SIGNUP_ROLE_KEY = 'talentx_signup_role';
 
 const AuthContext = createContext(null);
 
@@ -14,6 +15,26 @@ function loadStoredProfile(uid) {
     if (raw) {
       const data = JSON.parse(raw);
       if (data && data.uid === uid && (data.role === 'employer' || data.role === 'talent')) {
+        return {
+          id: data.uid,
+          uid: data.uid,
+          name: data.name || '',
+          email: data.email || '',
+          role: data.role,
+        };
+      }
+    }
+  } catch (_) {}
+  return null;
+}
+
+/** Load any stored profile (for optimistic init before Firebase restores session). */
+function loadStoredProfileAny() {
+  try {
+    const raw = localStorage.getItem(AUTH_STORAGE_KEY);
+    if (raw) {
+      const data = JSON.parse(raw);
+      if (data && data.uid && (data.role === 'employer' || data.role === 'talent')) {
         return {
           id: data.uid,
           uid: data.uid,
@@ -64,9 +85,16 @@ function loadMockAuth() {
 }
 
 export function AuthProvider({ children }) {
-  const [state, setState] = useState(() => (isFirebaseEnabled() ? { user: null, isAuthenticated: false, needsOnboarding: false } : loadMockAuth()));
+  const [state, setState] = useState(() => {
+    if (!isFirebaseEnabled()) return loadMockAuth();
+    const stored = loadStoredProfileAny();
+    if (stored) {
+      return { user: stored, isAuthenticated: true, needsOnboarding: false };
+    }
+    return { user: null, isAuthenticated: false, needsOnboarding: false };
+  });
 
-  // Firebase auth state
+  // Firebase auth state – follow backend flow: call onboard once with name, email, role
   useEffect(() => {
     if (!isFirebaseEnabled()) return;
     const auth = getFirebaseAuth();
@@ -74,7 +102,8 @@ export function AuthProvider({ children }) {
     const unsub = auth.onAuthStateChanged(async (firebaseUser) => {
       if (!firebaseUser) {
         setState({ user: null, isAuthenticated: false, needsOnboarding: false });
-        saveStoredProfile(null);
+        // Do not clear stored profile here: Firebase can fire null briefly before
+        // restoring the session on reload; we only clear profile on explicit logout.
         return;
       }
       const uid = firebaseUser.uid;
@@ -85,14 +114,50 @@ export function AuthProvider({ children }) {
           isAuthenticated: true,
           needsOnboarding: false,
         });
-      } else {
-        setState({
-          user: null,
-          isAuthenticated: false,
-          needsOnboarding: true,
-          firebaseUser: { uid, email: firebaseUser.email || '', displayName: firebaseUser.displayName || '' },
-        });
+        return;
       }
+      const email = firebaseUser.email || '';
+      const name = firebaseUser.displayName || email;
+      let signupRole = null;
+      try {
+        const r = sessionStorage.getItem(SIGNUP_ROLE_KEY);
+        if (r === 'employer' || r === 'talent') signupRole = r;
+      } catch (_) {}
+      if (signupRole && email) {
+        try {
+          const token = await firebaseUser.getIdToken(true);
+          if (isRealApi()) {
+            const backendRole = signupRole === 'employer' ? 'EMPLOYER' : 'TALENT';
+            const user = await apiOnboard({ name, email, role: backendRole }, () => Promise.resolve(token));
+            const savedProfile = {
+              uid: user.uid,
+              id: user.uid,
+              name: user.name,
+              email: user.email,
+              role: (user.role || backendRole).toLowerCase() === 'employer' ? 'employer' : 'talent',
+            };
+            saveStoredProfile(savedProfile);
+            try {
+              sessionStorage.removeItem(SIGNUP_ROLE_KEY);
+            } catch (_) {}
+            setState({ user: savedProfile, isAuthenticated: true, needsOnboarding: false });
+            return;
+          }
+          const savedProfile = { uid, id: uid, name, email, role: signupRole };
+          saveStoredProfile(savedProfile);
+          try {
+            sessionStorage.removeItem(SIGNUP_ROLE_KEY);
+          } catch (_) {}
+          setState({ user: savedProfile, isAuthenticated: true, needsOnboarding: false });
+          return;
+        } catch (_) {}
+      }
+      setState({
+        user: null,
+        isAuthenticated: false,
+        needsOnboarding: true,
+        firebaseUser: { uid, email, displayName: firebaseUser.displayName || '' },
+      });
     });
     return () => unsub();
   }, []);
@@ -122,7 +187,7 @@ export function AuthProvider({ children }) {
     return user.getIdToken(forceRefresh);
   }, []);
 
-  const login = useCallback(async (role, name) => {
+  const login = useCallback(async (roleOrEmail, nameOrPassword) => {
     if (isFirebaseEnabled()) {
       const auth = getFirebaseAuth();
       const { signInWithPopup } = await import('firebase/auth');
@@ -134,13 +199,30 @@ export function AuthProvider({ children }) {
       }
       return;
     }
-    if (role !== 'employer' && role !== 'talent') return;
-    const id = role === 'employer' ? 'emp-1' : 'talent-1';
+    if (roleOrEmail !== 'employer' && roleOrEmail !== 'talent') return;
+    const id = roleOrEmail === 'employer' ? 'emp-1' : 'talent-1';
     setState({
-      user: { id, name: name || (role === 'employer' ? 'Employer' : 'Talent'), role },
+      user: { id, name: nameOrPassword || (roleOrEmail === 'employer' ? 'Employer' : 'Talent'), role: roleOrEmail },
       isAuthenticated: true,
       needsOnboarding: false,
     });
+  }, []);
+
+  const loginWithEmailPassword = useCallback(async (email, password) => {
+    if (!isFirebaseEnabled()) return;
+    const auth = getFirebaseAuth();
+    const { signInWithEmailAndPassword } = await import('firebase/auth');
+    await signInWithEmailAndPassword(auth, email.trim(), password);
+  }, []);
+
+  const registerWithEmailPassword = useCallback(async (email, password, displayName = '') => {
+    if (!isFirebaseEnabled()) return;
+    const auth = getFirebaseAuth();
+    const { createUserWithEmailAndPassword, updateProfile } = await import('firebase/auth');
+    const userCred = await createUserWithEmailAndPassword(auth, email.trim(), password);
+    if (displayName && userCred.user) {
+      await updateProfile(userCred.user, { displayName: displayName.trim() });
+    }
   }, []);
 
   const completeOnboard = useCallback(async (name, email, role) => {
@@ -184,6 +266,8 @@ export function AuthProvider({ children }) {
     firebaseUser: state.firebaseUser,
     getIdToken,
     login,
+    loginWithEmailPassword,
+    registerWithEmailPassword,
     logout,
     completeOnboard,
   };

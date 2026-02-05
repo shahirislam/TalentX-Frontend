@@ -1,13 +1,16 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Plus, Users, UserPlus, Building2, Sparkles } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useApi } from '../hooks/useApi.js';
 import { ApiError } from '../api/index.js';
+import { apiOnboard } from '../api/talentxApi.js';
 
 export default function EmployerDashboard() {
-  const { user } = useAuth();
+  const { user, getIdToken } = useAuth();
   const api = useApi();
   const employerId = user?.id || user?.uid || 'emp-1';
+  const jobSeekersSectionRef = useRef(null);
+  const onboardRetryRef = useRef(false);
 
   const [createTitle, setCreateTitle] = useState('');
   const [createCompany, setCreateCompany] = useState('My Company');
@@ -22,6 +25,7 @@ export default function EmployerDashboard() {
   const [jobs, setJobs] = useState([]);
   const [applicants, setApplicants] = useState([]);
   const [topTalents, setTopTalents] = useState([]);
+  const [talentsError, setTalentsError] = useState('');
   const [invitationsKey, setInvitationsKey] = useState(0);
   const [invitedPairs, setInvitedPairs] = useState(() => new Set());
   const [loadingJobs, setLoadingJobs] = useState(true);
@@ -48,13 +52,52 @@ export default function EmployerDashboard() {
 
   const jobForTalents = talentJobId || selectedJobId || (jobs[0]?.id ?? null);
   useEffect(() => {
-    if (!jobForTalents) {
-      setTopTalents([]);
-      return;
-    }
+    let cancelled = false;
     setLoadingTalents(true);
-    api.getTopMatchedTalentsForJob(jobForTalents).then((list) => setTopTalents(list || [])).finally(() => setLoadingTalents(false));
-  }, [jobForTalents, api, invitationsKey]);
+    setTalentsError('');
+    const load = () =>
+      api.getAllTalents()
+        .then((list) => {
+          if (!cancelled) {
+            setTopTalents(list || []);
+            setTalentsError('');
+          }
+        })
+        .catch(async (err) => {
+          if (cancelled) return;
+          const is403 = err?.status === 403;
+          const isEmployer = user?.role === 'employer';
+          if (is403 && isEmployer && !onboardRetryRef.current && getIdToken) {
+            onboardRetryRef.current = true;
+            try {
+              const token = await getIdToken(true);
+              await apiOnboard(
+                {
+                  name: user?.name || '',
+                  email: user?.email || '',
+                  role: 'EMPLOYER',
+                },
+                () => Promise.resolve(token)
+              );
+              return load();
+            } catch (_) {
+              onboardRetryRef.current = false;
+            }
+          }
+          setTopTalents([]);
+          setTalentsError(err?.message || 'Failed to load job seekers');
+        })
+        .finally(() => {
+          if (!cancelled) setLoadingTalents(false);
+        });
+    load();
+    return () => { cancelled = true; };
+  }, [api, invitationsKey, user?.role, user?.name, user?.email, getIdToken]);
+
+  const handleInviteJobSeekersClick = (jobId) => {
+    setTalentJobId((current) => (current === jobId ? null : jobId));
+    setTimeout(() => jobSeekersSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
+  };
 
   const selectedJob = jobs.find((j) => j.id === selectedJobId);
 
@@ -183,8 +226,8 @@ export default function EmployerDashboard() {
                   <button type="button" onClick={() => setSelectedJobId(selectedJobId === job.id ? null : job.id)} className="rounded-md border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-100">
                     View applicants
                   </button>
-                  <button type="button" onClick={() => setTalentJobId(talentJobId === job.id ? null : job.id)} className="rounded-md border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-100">
-                    Top talents
+                  <button type="button" onClick={() => handleInviteJobSeekersClick(job.id)} className="rounded-md border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-sm text-indigo-700 hover:bg-indigo-100">
+                    Invite job seekers
                   </button>
                 </div>
               </div>
@@ -192,6 +235,19 @@ export default function EmployerDashboard() {
           </div>
         )}
       </section>
+
+      <div ref={jobSeekersSectionRef}>
+        <TopTalentsSection
+          jobs={jobs}
+          jobForTalents={jobForTalents}
+          setTalentJobIdState={setTalentJobId}
+          topTalents={topTalents}
+          loadingTalents={loadingTalents}
+          talentsError={talentsError}
+          getInvitationStatus={getInvitationStatus}
+          handleInvite={handleInvite}
+        />
+      </div>
 
       {selectedJob && (
         <section className="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
@@ -211,21 +267,11 @@ export default function EmployerDashboard() {
           )}
         </section>
       )}
-
-      <TopTalentsSection
-        jobs={jobs}
-        jobForTalents={jobForTalents}
-        setTalentJobIdState={setTalentJobId}
-        topTalents={topTalents}
-        loadingTalents={loadingTalents}
-        getInvitationStatus={getInvitationStatus}
-        handleInvite={handleInvite}
-      />
     </div>
   );
 }
 
-function TopTalentsSection({ jobs, jobForTalents, setTalentJobIdState, topTalents, loadingTalents, getInvitationStatus, handleInvite }) {
+function TopTalentsSection({ jobs, jobForTalents, setTalentJobIdState, topTalents, loadingTalents, talentsError, getInvitationStatus, handleInvite }) {
   const [statusMap, setStatusMap] = useState({});
   useEffect(() => {
     if (!jobForTalents || !topTalents.length) return;
@@ -240,21 +286,29 @@ function TopTalentsSection({ jobs, jobForTalents, setTalentJobIdState, topTalent
 
   return (
     <section className="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
-      <h2 className="mb-4 flex items-center gap-2 text-lg font-medium text-gray-900">
+      <h2 className="mb-2 flex items-center gap-2 text-lg font-medium text-gray-900">
         <UserPlus className="h-5 w-5" />
-        Top Matched Talents
+        Job seekers to invite
         {jobs.length > 0 && (
-          <select value={jobForTalents || ''} onChange={(e) => setTalentJobIdState(e.target.value || null)} className="ml-2 rounded border border-gray-300 py-1 pl-2 pr-6 text-sm">
+          <select value={jobForTalents || ''} onChange={(e) => setTalentJobIdState(e.target.value || null)} className="ml-2 rounded border border-gray-300 py-1 pl-2 pr-8 text-sm">
+            <option value="">Select a job</option>
             {jobs.map((j) => (
               <option key={j.id} value={j.id}>{j.title}</option>
             ))}
           </select>
         )}
       </h2>
+      <p className="mb-4 text-sm text-gray-500">
+        {jobForTalents ? 'All job seekers who signed up. Select a job above and click Invite to ask them to apply.' : 'Click "Invite job seekers" on a job above, or pick a job from the dropdown.'}
+      </p>
       {!jobForTalents ? (
-        <p className="text-gray-500">Create a job first to see matched talents.</p>
+        <p className="text-gray-500">Click "Invite job seekers" on a job above, or select a job from the dropdown to see the list.</p>
       ) : loadingTalents ? (
-        <p className="text-gray-500">Loading...</p>
+        <p className="text-gray-500">Loading job seekers...</p>
+      ) : talentsError ? (
+        <p className="text-red-600">{talentsError}</p>
+      ) : topTalents.length === 0 ? (
+        <p className="text-gray-500">No job seekers have signed up yet. When talents register and choose “Job seeker”, they will appear here.</p>
       ) : (
         <ul className="space-y-3">
           {topTalents.map((t) => {
@@ -262,8 +316,10 @@ function TopTalentsSection({ jobs, jobForTalents, setTalentJobIdState, topTalent
             return (
               <li key={t.talentId} className="flex flex-wrap items-center justify-between gap-4 rounded border border-gray-100 p-4">
                 <div>
-                  <span className="font-medium text-gray-900">{t.talentName}</span>
-                  <span className="ml-2 rounded bg-indigo-100 px-2 py-0.5 text-sm text-indigo-800">Match: {t.score}%</span>
+                  <span className="font-medium text-gray-900">{t.talentName || 'Job seeker'}</span>
+                  {t.score != null && (
+                    <span className="ml-2 rounded bg-indigo-100 px-2 py-0.5 text-sm text-indigo-800">Match: {t.score}%</span>
+                  )}
                 </div>
                 <div className="flex items-center gap-2">
                   {status === 'pending' && <span className="text-sm text-amber-600">Pending</span>}

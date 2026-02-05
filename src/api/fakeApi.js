@@ -105,6 +105,15 @@ export function getTopMatchedTalentsForJob(jobId) {
   return getTalentMatchScoresForJob(jobId, talents);
 }
 
+/** All signed-up job seekers (same shape as API: talentId, talentName, score optional). */
+export function getAllTalents() {
+  return getTalents().map((t) => ({
+    talentId: t.id,
+    talentName: t.name ?? 'Talent',
+    score: null,
+  }));
+}
+
 export function getApplicationsForTalent(talentId) {
   return getApplicationsStore().filter((a) => a.talentId === talentId);
 }

@@ -28,13 +28,14 @@ function createApi(getToken) {
       applyToJob: (jobId) => real.apiApplyToJob(jobId, getToken),
       getApplicationsByJob: (jobId) => real.apiGetApplicants(jobId, getToken),
       getTopMatchedTalentsForJob: (jobId) => real.apiGetMatchedTalents(jobId, getToken),
+      getAllTalents: () => real.apiGetAllTalents(getToken),
       getInvitationsForTalent: () => real.apiGetInvitations(getToken),
       respondToInvitation: (invitationId, status) => real.apiRespondToInvitation(invitationId, status, getToken),
       createJob: (payload) => real.apiCreateJob(payload, getToken),
       generateJobDescription: (payload) => real.apiGenerateJd(payload, getToken),
       createInvitation: (payload) => real.apiCreateInvitation(payload, getToken),
       getMatchedJobsForTalent: () => real.apiGetMatchedJobs(getToken),
-      getApplicationsForTalent: async () => [],
+      getApplicationsForTalent: () => real.apiGetMyApplications(getToken),
       hasApplied: async () => false,
       getInvitationStatus: async () => null,
     };
@@ -48,6 +49,7 @@ function createApi(getToken) {
     applyToJob: (jobId, talentId, talentName, source) => Promise.resolve(fake.applyToJob(jobId, talentId, talentName, source)),
     getApplicationsByJob: (jobId) => Promise.resolve(fake.getApplicationsByJob(jobId)),
     getTopMatchedTalentsForJob: (jobId) => Promise.resolve(fake.getTopMatchedTalentsForJob(jobId)),
+    getAllTalents: () => Promise.resolve(fake.getAllTalents()),
     getInvitationsForTalent: (talentId) => Promise.resolve(fake.getInvitationsForTalent(talentId)),
     respondToInvitation: (invitationId, status) => Promise.resolve(fake.respondToInvitation(invitationId, status)),
     createJob: (payload) => Promise.resolve(fake.createJob({
